@@ -1,4 +1,3 @@
-```java
 package com.safeyoutube.brave;
 
 import android.app.Notification;
@@ -205,4 +204,3 @@ public class VolumeLimiterService extends Service {
         }
     }
 }
-```
