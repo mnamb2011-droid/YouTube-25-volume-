@@ -1,3 +1,4 @@
+```java
 package com.safeyoutube.brave;
 
 import android.app.Notification;
@@ -26,7 +27,7 @@ public class VolumeLimiterService extends Service {
 
     public static final String ACTION_START = "com.safeyoutube.brave.ACTION_START";
     public static final String ACTION_STOP = "com.safeyoutube.brave.ACTION_STOP";
-    public static final int MAX_VOLUME_PERCENT = 25;
+    public static final int MAX_VOLUME_PERCENT = 40;
 
     private static final String CHANNEL_ID = "volume_limiter_channel";
     private static final int NOTIFICATION_ID = 1001;
@@ -102,7 +103,7 @@ public class VolumeLimiterService extends Service {
 
         Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("حماية صوت YouTube مفعّلة")
-                .setContentText("الحد الأقصى للصوت: 25% (" + capVol + " من " + maxVol + ")")
+                .setContentText("الحد الأقصى للصوت: " + MAX_VOLUME_PERCENT + "% (" + capVol + " من " + maxVol + ")")
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setOngoing(true)
                 .setSilent(true)
@@ -196,7 +197,7 @@ public class VolumeLimiterService extends Service {
                 "حماية مستوى الصوت",
                 NotificationManager.IMPORTANCE_LOW
         );
-        channel.setDescription("تقييد مستوى صوت الوسائط عند 25% كحد أقصى أثناء تشغيل يوتيوب");
+        channel.setDescription("تقييد مستوى صوت الوسائط عند " + MAX_VOLUME_PERCENT + "% كحد أقصى أثناء تشغيل يوتيوب");
         channel.setShowBadge(false);
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) {
@@ -204,3 +205,4 @@ public class VolumeLimiterService extends Service {
         }
     }
 }
+```
