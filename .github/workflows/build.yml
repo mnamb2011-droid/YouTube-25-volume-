@@ -1,4 +1,4 @@
-name: Build YouTube Brave VolumeCap APK
+name: Build YouTube Brave Downloader APK
 
 on:
   push:
@@ -24,6 +24,7 @@ jobs:
           mkdir -p app/src/main/java/com/safeyoutube/brave
           mkdir -p app/src/main/res/layout
           mkdir -p app/src/main/res/values
+          mkdir -p app/src/main/res/xml
           mkdir -p app/src/main/res/mipmap-mdpi
           mkdir -p app/src/main/res/mipmap-hdpi
           mkdir -p app/src/main/res/mipmap-xhdpi
@@ -32,7 +33,10 @@ jobs:
 
           cp MainActivity.java app/src/main/java/com/safeyoutube/brave/MainActivity.java
           cp VolumeLimiterService.java app/src/main/java/com/safeyoutube/brave/VolumeLimiterService.java
+          cp YouTubeQualityAccessibilityService.java app/src/main/java/com/safeyoutube/brave/YouTubeQualityAccessibilityService.java
+          cp DownloadActivity.java app/src/main/java/com/safeyoutube/brave/DownloadActivity.java
           cp activity_main.xml app/src/main/res/layout/activity_main.xml
+          cp activity_download.xml app/src/main/res/layout/activity_download.xml
 
           cat << 'EOF' > settings.gradle
           pluginManagement {
@@ -49,7 +53,7 @@ jobs:
                   mavenCentral()
               }
           }
-          rootProject.name = "YouTubeBraveVolumeCap"
+          rootProject.name = "YouTubeBraveDownloader"
           include ':app'
           EOF
 
@@ -60,7 +64,7 @@ jobs:
           EOF
 
           cat << 'EOF' > gradle.properties
-          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          org.gradle.jvmargs=-Xmx3072m -Dfile.encoding=UTF-8
           android.useAndroidX=true
           android.enableJetifier=false
           EOF
@@ -78,8 +82,11 @@ jobs:
                   applicationId "com.safeyoutube.brave"
                   minSdk 26
                   targetSdk 34
-                  versionCode 1
-                  versionName "1.0"
+                  versionCode 4
+                  versionName "4.0"
+                  ndk {
+                      abiFilters 'arm64-v8a', 'armeabi-v7a'
+                  }
               }
 
               buildTypes {
@@ -93,12 +100,20 @@ jobs:
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
+
+              packaging {
+                  jniLibs {
+                      useLegacyPackaging = true
+                  }
+              }
           }
 
           dependencies {
-              implementation platform('org.jetbrains.kotlin:kotlin-bom:1.8.22')
+              implementation platform('org.jetbrains.kotlin:kotlin-bom:1.9.24')
               implementation 'androidx.appcompat:appcompat:1.7.0'
               implementation 'androidx.browser:browser:1.8.0'
+              implementation 'io.github.junkfood02.youtubedl-android:library:0.18.1'
+              implementation 'io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1'
           }
           EOF
 
@@ -108,9 +123,12 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+              <uses-permission android:name="android.permission.INTERNET" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
               <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
 
               <queries>
                   <package android:name="com.brave.browser" />
@@ -123,8 +141,10 @@ jobs:
 
               <application
                   android:allowBackup="true"
+                  android:extractNativeLibs="true"
                   android:icon="@mipmap/ic_launcher"
                   android:label="@string/app_name"
+                  android:requestLegacyExternalStorage="true"
                   android:roundIcon="@mipmap/ic_launcher_round"
                   android:supportsRtl="true"
                   android:theme="@style/Theme.SafeYouTube">
@@ -139,23 +159,61 @@ jobs:
                       </intent-filter>
                   </activity>
 
+                  <activity
+                      android:name=".DownloadActivity"
+                      android:exported="true"
+                      android:label="تحميل (YouTube)">
+                      <intent-filter>
+                          <action android:name="android.intent.action.SEND" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <data android:mimeType="text/plain" />
+                      </intent-filter>
+                  </activity>
+
                   <service
                       android:name=".VolumeLimiterService"
                       android:exported="false"
                       android:foregroundServiceType="specialUse">
                       <property
                           android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                          android:value="Enforces a 25 percent maximum media volume cap while YouTube is open in Brave browser" />
+                          android:value="Enforces 40 percent volume cap and hides Brave top bar with an overlay" />
+                  </service>
+
+                  <service
+                      android:name=".YouTubeQualityAccessibilityService"
+                      android:exported="true"
+                      android:label="@string/accessibility_service_label"
+                      android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+                      <intent-filter>
+                          <action android:name="android.accessibilityservice.AccessibilityService" />
+                      </intent-filter>
+                      <meta-data
+                          android:name="android.accessibilityservice"
+                          android:resource="@xml/accessibility_service_config" />
                   </service>
 
               </application>
           </manifest>
           EOF
 
+          cat << 'EOF' > app/src/main/res/xml/accessibility_service_config.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+              android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged"
+              android:accessibilityFeedbackType="feedbackGeneric"
+              android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"
+              android:canRetrieveWindowContent="true"
+              android:description="@string/accessibility_service_desc"
+              android:notificationTimeout="250"
+              android:packageNames="com.brave.browser,com.brave.browser_beta,com.brave.browser_nightly" />
+          EOF
+
           cat << 'EOF' > app/src/main/res/values/strings.xml
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
               <string name="app_name">YouTube</string>
+              <string name="accessibility_service_label">YouTube 360p (Brave)</string>
+              <string name="accessibility_service_desc">تحديد جودة فيديو يوتيوب تلقائياً على 360p عند بدء التشغيل داخل متصفح Brave.</string>
           </resources>
           EOF
 
@@ -222,5 +280,5 @@ jobs:
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: YouTube-Brave-VolumeCap-APK
+          name: YouTube-Brave-Downloader-APK
           path: app/build/outputs/apk/debug/app-debug.apk
