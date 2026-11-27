@@ -522,7 +522,8 @@ public class DownloadActivity extends AppCompatActivity {
         executor.execute(() -> {
             try {
                 YoutubeDL.UpdateStatus status = YoutubeDL.getInstance()
-                        .updateYoutubeDL(getApplicationContext());
+                        .updateYoutubeDL(getApplicationContext(), YoutubeDL.UpdateChannel._STABLE.INSTANCE);
+
                 runOnUiThread(() -> {
                     busy = false;
                     progressBar.setIndeterminate(false);
