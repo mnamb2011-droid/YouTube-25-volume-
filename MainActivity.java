@@ -3,13 +3,16 @@ package com.safeyoutube.brave;
 import android.Manifest;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.widget.Button;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -30,7 +33,11 @@ public class MainActivity extends AppCompatActivity {
     private static final int REQ_NOTIF_PERMISSION = 101;
 
     private TextView tvStatus;
+    private Button btnOverlayPermission;
+    private Button btnAccessibilityPermission;
+    private Switch switchAuto360;
     private AudioManager audioManager;
+    private SharedPreferences prefs;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -38,29 +45,89 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
-        tvStatus = findViewById(R.id.tvStatus);
-        Button btnOpenYouTube = findViewById(R.id.btnOpenYouTube);
-        Button btnStopLimiter = findViewById(R.id.btnStopLimiter);
+        prefs = getSharedPreferences(VolumeLimiterService.PREFS_NAME, MODE_PRIVATE);
 
-        updateStatusText();
+        tvStatus = findViewById(R.id.tvStatus);
+        btnOverlayPermission = findViewById(R.id.btnOverlayPermission);
+        btnAccessibilityPermission = findViewById(R.id.btnAccessibilityPermission);
+        switchAuto360 = findViewById(R.id.switchAuto360);
+        Button btnOpenYouTube = findViewById(R.id.btnOpenYouTube);
+        Button btnOpenDownloader = findViewById(R.id.btnOpenDownloader);
+        Button btnStopAll = findViewById(R.id.btnStopAll);
+
+        switchAuto360.setChecked(prefs.getBoolean(VolumeLimiterService.KEY_AUTO_360, true));
+        switchAuto360.setOnCheckedChangeListener((buttonView, isChecked) ->
+                prefs.edit().putBoolean(VolumeLimiterService.KEY_AUTO_360, isChecked).apply()
+        );
+
+        btnOverlayPermission.setOnClickListener(v -> {
+            Intent intent = new Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + getPackageName())
+            );
+            startActivity(intent);
+        });
+
+        btnAccessibilityPermission.setOnClickListener(v -> {
+            Toast.makeText(this, "فعّل خيار (YouTube 360p) من قائمة التطبيقات المثبّتة", Toast.LENGTH_LONG).show();
+            startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+        });
 
         btnOpenYouTube.setOnClickListener(v -> launchYouTubeInBrave());
-        btnStopLimiter.setOnClickListener(v -> {
+
+        btnOpenDownloader.setOnClickListener(v ->
+                startActivity(new Intent(this, DownloadActivity.class))
+        );
+
+        btnStopAll.setOnClickListener(v -> {
             Intent stopIntent = new Intent(this, VolumeLimiterService.class);
             stopIntent.setAction(VolumeLimiterService.ACTION_STOP);
             startService(stopIntent);
-            Toast.makeText(this, "تم إيقاف قفل الصوت", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "تم إيقاف قفل الصوت والغطاء العلوي", Toast.LENGTH_SHORT).show();
             finish();
         });
 
         requestNotificationPermissionIfNeeded();
-        launchYouTubeInBrave();
+        updateUiState();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        updateStatusText();
+        updateUiState();
+    }
+
+    private void updateUiState() {
+        boolean overlayOk = Settings.canDrawOverlays(this);
+        boolean accOk = isAccessibilityEnabled();
+        String bravePkg = findInstalledBravePackage();
+
+        btnOverlayPermission.setText(overlayOk
+                ? "✓ 1. إخفاء الشريط العلوي مفعّل"
+                : "1. تفعيل إخفاء الشريط العلوي (Overlay)");
+
+        btnAccessibilityPermission.setText(accOk
+                ? "✓ 2. خدمة جودة 360p مفعّلة"
+                : "2. تفعيل خدمة جودة 360p (إمكانية الوصول)");
+
+        if (audioManager != null) {
+            int maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+            int capVol = VolumeLimiterService.getMaxAllowedVolume(audioManager);
+            if (bravePkg != null) {
+                tvStatus.setText("قفل الصوت عند " + VolumeLimiterService.MAX_VOLUME_PERCENT + "% (" + capVol + " من " + maxVol + ")" +
+                        (overlayOk ? " • الشريط العلوي مخفي" : " • فعّل الغطاء لإخفاء الشريط"));
+            } else {
+                tvStatus.setText("متصفح Brave غير مثبّت على الجهاز.");
+            }
+        }
+    }
+
+    private boolean isAccessibilityEnabled() {
+        String enabled = Settings.Secure.getString(
+                getContentResolver(),
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        );
+        return enabled != null && enabled.contains(getPackageName());
     }
 
     private void requestNotificationPermissionIfNeeded() {
@@ -76,19 +143,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void updateStatusText() {
-        if (audioManager == null) return;
-        int maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
-        int capVol = VolumeLimiterService.getMaxAllowedVolume(audioManager);
-        String bravePkg = findInstalledBravePackage();
-        if (bravePkg != null) {
-            tvStatus.setText("قفل الصوت مفعّل عند 25% كحد أقصى (" + capVol + " من " + maxVol + ")");
-        } else {
-            tvStatus.setText("متصفح Brave غير مثبّت على الجهاز.\nاضغط الزر بالأسفل لتثبيته من Google Play.");
-        }
-    }
-
-    private void startVolumeLimiter() {
+    private void startVolumeAndOverlayService() {
         if (audioManager != null) {
             int capVol = VolumeLimiterService.getMaxAllowedVolume(audioManager);
             if (audioManager.getStreamVolume(AudioManager.STREAM_MUSIC) > capVol) {
@@ -101,7 +156,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void launchYouTubeInBrave() {
-        startVolumeLimiter();
+        startVolumeAndOverlayService();
 
         String bravePackage = findInstalledBravePackage();
         if (bravePackage == null) {

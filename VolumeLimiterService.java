@@ -9,14 +9,24 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
+import android.content.res.Configuration;
 import android.database.ContentObserver;
+import android.graphics.Color;
+import android.graphics.PixelFormat;
 import android.media.AudioManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.provider.Settings;
+import android.util.TypedValue;
+import android.view.Gravity;
+import android.view.View;
+import android.view.WindowManager;
+import android.widget.FrameLayout;
+import android.widget.Toast;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
@@ -26,13 +36,19 @@ public class VolumeLimiterService extends Service {
 
     public static final String ACTION_START = "com.safeyoutube.brave.ACTION_START";
     public static final String ACTION_STOP = "com.safeyoutube.brave.ACTION_STOP";
+    public static final String PREFS_NAME = "safe_yt_prefs";
+    public static final String KEY_SESSION_ACTIVE = "session_active";
+    public static final String KEY_AUTO_360 = "auto_360";
     public static final int MAX_VOLUME_PERCENT = 40;
 
     private static final String CHANNEL_ID = "volume_limiter_channel";
     private static final int NOTIFICATION_ID = 1001;
     private static final long POLL_INTERVAL_MS = 400L;
+    private static final int OVERLAY_HEIGHT_DP = 58;
 
     private AudioManager audioManager;
+    private WindowManager windowManager;
+    private View topBarOverlay;
     private Handler handler;
     private ContentObserver volumeObserver;
     private BroadcastReceiver volumeReceiver;
@@ -56,6 +72,7 @@ public class VolumeLimiterService extends Service {
     public void onCreate() {
         super.onCreate();
         audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        windowManager = (WindowManager) getSystemService(Context.WINDOW_SERVICE);
         handler = new Handler(Looper.getMainLooper());
         createNotificationChannel();
     }
@@ -67,6 +84,8 @@ public class VolumeLimiterService extends Service {
             return START_NOT_STICKY;
         }
 
+        setSessionActive(true);
+
         if (!isRunning) {
             isRunning = true;
             startForegroundCompat();
@@ -76,7 +95,72 @@ public class VolumeLimiterService extends Service {
         } else {
             enforceVolumeCap();
         }
+
+        updateOverlayForOrientation(getResources().getConfiguration().orientation);
         return START_STICKY;
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        if (isRunning) {
+            updateOverlayForOrientation(newConfig.orientation);
+        }
+    }
+
+    private void updateOverlayForOrientation(int orientation) {
+        if (orientation == Configuration.ORIENTATION_LANDSCAPE) {
+            removeTopBarOverlay();
+        } else {
+            showTopBarOverlay();
+        }
+    }
+
+    private void showTopBarOverlay() {
+        if (topBarOverlay != null || windowManager == null) return;
+        if (!Settings.canDrawOverlays(this)) return;
+
+        int heightPx = (int) TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP,
+                OVERLAY_HEIGHT_DP,
+                getResources().getDisplayMetrics()
+        );
+
+        FrameLayout cover = new FrameLayout(this);
+        cover.setBackgroundColor(Color.parseColor("#0F0F0F"));
+        cover.setOnLongClickListener(v -> {
+            Toast.makeText(this, "تم إيقاف الغطاء العلوي وقفل الصوت", Toast.LENGTH_SHORT).show();
+            stopLimiter();
+            return true;
+        });
+
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                heightPx,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                PixelFormat.OPAQUE
+        );
+        params.gravity = Gravity.TOP | Gravity.START;
+        params.x = 0;
+        params.y = 0;
+
+        try {
+            windowManager.addView(cover, params);
+            topBarOverlay = cover;
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void removeTopBarOverlay() {
+        if (topBarOverlay != null && windowManager != null) {
+            try {
+                windowManager.removeView(topBarOverlay);
+            } catch (Exception ignored) {
+            }
+            topBarOverlay = null;
+        }
     }
 
     private void startForegroundCompat() {
@@ -101,13 +185,13 @@ public class VolumeLimiterService extends Service {
         int capVol = getMaxAllowedVolume(audioManager);
 
         Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("حماية صوت YouTube مفعّلة")
-                .setContentText("الحد الأقصى للصوت: " + MAX_VOLUME_PERCENT + "% (" + capVol + " من " + maxVol + ")")
+                .setContentTitle("YouTube عبر Brave (الصوت " + MAX_VOLUME_PERCENT + "%)")
+                .setContentText("الحد الأقصى: " + capVol + " من " + maxVol + " • اضغط مطوّلاً على الشريط العلوي للإيقاف")
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setOngoing(true)
                 .setSilent(true)
                 .setContentIntent(openPendingIntent)
-                .addAction(0, "إيقاف قفل الصوت", stopPendingIntent)
+                .addAction(0, "إيقاف الحماية والغطاء", stopPendingIntent)
                 .build();
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -150,8 +234,15 @@ public class VolumeLimiterService extends Service {
         }
     }
 
+    private void setSessionActive(boolean active) {
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        prefs.edit().putBoolean(KEY_SESSION_ACTIVE, active).apply();
+    }
+
     private void stopLimiter() {
         isRunning = false;
+        setSessionActive(false);
+        removeTopBarOverlay();
         cleanupWatchers();
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
@@ -180,6 +271,8 @@ public class VolumeLimiterService extends Service {
     @Override
     public void onDestroy() {
         isRunning = false;
+        setSessionActive(false);
+        removeTopBarOverlay();
         cleanupWatchers();
         super.onDestroy();
     }
@@ -193,10 +286,10 @@ public class VolumeLimiterService extends Service {
     private void createNotificationChannel() {
         NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID,
-                "حماية مستوى الصوت",
+                "حماية الصوت وإخفاء الشريط",
                 NotificationManager.IMPORTANCE_LOW
         );
-        channel.setDescription("تقييد مستوى صوت الوسائط عند " + MAX_VOLUME_PERCENT + "% كحد أقصى أثناء تشغيل يوتيوب");
+        channel.setDescription("تقييد مستوى الصوت عند " + MAX_VOLUME_PERCENT + "% وإخفاء شريط Brave العلوي");
         channel.setShowBadge(false);
         NotificationManager manager = getSystemService(NotificationManager.class);
         if (manager != null) {
